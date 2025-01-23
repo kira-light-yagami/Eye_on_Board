@@ -1,7 +1,14 @@
 from picamera2 import Picamera2, Preview
 from pyzbar.pyzbar import decode
-from PIL import Image, ImageEnhance
+from PIL import Image, ImageEnhance, ImageOps
 import numpy as np
+
+# List of valid QR codes (you can add any valid QR code data here)
+valid_qr_codes = [
+    "VALID_QR_CODE_1",
+    "VALID_QR_CODE_2",
+    "VALID_QR_CODE_3"
+]
 
 # Initialize the camera
 print("Starting camera...")
@@ -26,29 +33,36 @@ while True:
         picam2.capture_file(image_name)
         print(f"Image captured and saved as {image_name}.")
 
-        # Process the captured image for QR code
-        print("Processing the captured image for QR code...")
+        # Process image for QR code
+        print("Processing image for QR code...")
 
         try:
             # Open the captured image
             qr_image = Image.open(image_name)
 
-            # Convert to grayscale for better QR code detection
+            # Convert to grayscale
             qr_image_gray = qr_image.convert('L')
 
             # Enhance image brightness and contrast if needed (optional)
             enhancer = ImageEnhance.Contrast(qr_image_gray)
-            qr_image_gray = enhancer.enhance(2.0)  # Increase contrast (adjust if necessary)
+            qr_image_gray = enhancer.enhance(2.0)  # Increase contrast (tune this value if necessary)
 
-            # Convert to numpy array for pyzbar
+            # Convert the image to numpy array for OpenCV
             qr_image_cv = np.array(qr_image_gray)
 
             # Decode QR code from the processed image
-            decoded_objects = decode(qr_image_cv)
+            decoded_objects = decode(qr_image_gray)
 
             if decoded_objects:
                 for obj in decoded_objects:
-                    print("QR Code detected:", obj.data.decode("utf-8"))
+                    qr_data = obj.data.decode("utf-8")
+                    print("QR Code detected:", qr_data)
+
+                    # Check if the QR code is in the valid list
+                    if qr_data in valid_qr_codes:
+                        print("Valid QR Code!")
+                    else:
+                        print("Fake QR Code detected!")
             else:
                 print("No QR code detected.")
         except Exception as e:
