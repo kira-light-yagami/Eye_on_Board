@@ -1,24 +1,19 @@
-import cv2
 from picamera2 import Picamera2, Preview
-
-# Path to the image you want to scan
-image_path = r"D:\coding_projects\python\train thef detection\Eye_on_Board\code.png"  # Use a raw string to avoid escape issues
-
-# Initialize QR code detector
-qr_detector = cv2.QRCodeDetector()
+from pyzbar.pyzbar import decode
+from PIL import Image, ImageEnhance
+import numpy as np
 
 # Initialize the camera
 print("Starting camera...")
 picam2 = Picamera2()
 
 # Configure camera resolution and preview
-camera_config = picam2.create_preview_configuration(main={"size": (640, 480)})
+camera_config = picam2.create_preview_configuration(main={"size": (1280, 720)})  # Higher resolution for better QR detection
 picam2.configure(camera_config)
 
 # Start the camera with preview
 print("Starting preview...")
-picam2.start_preview(Preview.QTGL)  # Use QTGL for graphical preview (requires GUI/SSH forwarding)
-
+picam2.start_preview(Preview.QTGL)
 picam2.start()
 
 print("Press 'c' to capture an image or 'q' to quit.")
@@ -31,21 +26,33 @@ while True:
         picam2.capture_file(image_name)
         print(f"Image captured and saved as {image_name}.")
 
-        # Read the captured image and check for QR code
-        image = cv2.imread(image_name)
+        # Process the captured image for QR code
+        print("Processing the captured image for QR code...")
 
-        # Check if the image was loaded successfully
-        if image is None:
-            print(f"Error: Could not load image from path: {image_name}")
-        else:
-            # Detect and decode QR code
-            decoded_text, points, _ = qr_detector.detectAndDecode(image)
+        try:
+            # Open the captured image
+            qr_image = Image.open(image_name)
 
-            if decoded_text:
-                print("QR Code detected:", decoded_text)
+            # Convert to grayscale for better QR code detection
+            qr_image_gray = qr_image.convert('L')
+
+            # Enhance image brightness and contrast if needed (optional)
+            enhancer = ImageEnhance.Contrast(qr_image_gray)
+            qr_image_gray = enhancer.enhance(2.0)  # Increase contrast (adjust if necessary)
+
+            # Convert to numpy array for pyzbar
+            qr_image_cv = np.array(qr_image_gray)
+
+            # Decode QR code from the processed image
+            decoded_objects = decode(qr_image_cv)
+
+            if decoded_objects:
+                for obj in decoded_objects:
+                    print("QR Code detected:", obj.data.decode("utf-8"))
             else:
                 print("No QR code detected.")
-                
+        except Exception as e:
+            print(f"Error processing image: {e}")
     elif user_input == 'q':
         # Quit the program
         print("Exiting...")
