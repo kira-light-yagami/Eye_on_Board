@@ -1,103 +1,109 @@
-import RPi.GPIO as GPIO
-import time
-import cv2
-import csv
-from datetime import date, datetime
 from picamera2 import Picamera2, Preview
-import numpy as np
-import servo_controller  # Import your servo control library
+from pyzbar.pyzbar import decode
+from PIL import Image, ImageEnhance
+import sqlite3
+import RPi.GPIO as GPIO
+from time import sleep
 
-# GPIO setup for LEDs
-GPIO.setmode(GPIO.BCM)  # Use BCM GPIO numbering
-green_led_pin = 17
-red_led_pin = 27
-servo_pin = 18  # Pin for servo motor
+# GPIO setup
+GREEN_LED = 17
+RED_LED = 27
+SERVO_PIN = 18
 
-# Set up LED pins
-GPIO.setup(green_led_pin, GPIO.OUT)
-GPIO.setup(red_led_pin, GPIO.OUT)
-GPIO.setup(servo_pin, GPIO.OUT)
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(GREEN_LED, GPIO.OUT)
+GPIO.setup(RED_LED, GPIO.OUT)
+GPIO.setup(SERVO_PIN, GPIO.OUT)
+
+# Set up servo motor PWM
+servo = GPIO.PWM(SERVO_PIN, 50)  # 50Hz frequency
+servo.start(0)  # Start with the servo at 0 position
 
 # Initialize the camera
 print("Starting camera...")
 picam2 = Picamera2()
 
 # Configure camera resolution and preview
-camera_config = picam2.create_preview_configuration(main={"size": (640, 480)})
+camera_config = picam2.create_preview_configuration(main={"size": (1280, 720)})
 picam2.configure(camera_config)
 
 # Start the camera with preview
 print("Starting preview...")
-picam2.start_preview(Preview.QTGL)  # Use QTGL for graphical preview (requires GUI/SSH forwarding)
-
+picam2.start_preview(Preview.QTGL)
 picam2.start()
 
-# QR code detection method
-detector = cv2.QRCodeDetector()
+# Function to check QR code validity from the database
+def is_valid_qr_code(qr_data):
+    conn = sqlite3.connect('qr_codes.db')
+    cursor = conn.cursor()
 
-# Adding time and date information
-today = date.today()
-date_today = today.strftime("%d-%b-%Y")
+    # Check if the QR code data exists in the database
+    cursor.execute('''
+    SELECT * FROM scanned_qr_codes WHERE qr_data = ?
+    ''', (qr_data,))
+    
+    qr_code = cursor.fetchone()
+    conn.close()
 
-now = datetime.now()
-timeRN = now.strftime("%H:%M:%S")
+    return qr_code is not None
 
+# Function to capture and process the image
+def capture_and_process_image():
+    image_name = "captured_image.jpg"
+    print("Capturing image...")
+    picam2.capture_file(image_name)
+    print(f"Image captured and saved as {image_name}.")
+
+    # Process image for QR code
+    print("Processing image for QR code...")
+    try:
+        qr_image = Image.open(image_name)
+        qr_image_gray = qr_image.convert('L')  # Convert to grayscale
+        enhancer = ImageEnhance.Contrast(qr_image_gray)
+        qr_image_gray = enhancer.enhance(2.0)  # Increase contrast
+
+        decoded_objects = decode(qr_image_gray)
+        if decoded_objects:
+            for obj in decoded_objects:
+                qr_data = obj.data.decode("utf-8")
+                print(f"QR Code detected: {qr_data}")
+
+                # Check validity and control LEDs/servo
+                if is_valid_qr_code(qr_data):
+                    print("The QR code is valid.")
+                    GPIO.output(GREEN_LED, GPIO.HIGH)
+                    GPIO.output(RED_LED, GPIO.LOW)
+                    servo.ChangeDutyCycle(7.5)  # Move servo to 90°
+                    sleep(1)
+                    servo.ChangeDutyCycle(0)  # Stop servo movement
+                else:
+                    print("The QR code is fake or not in the database.")
+                    GPIO.output(RED_LED, GPIO.HIGH)
+                    GPIO.output(GREEN_LED, GPIO.LOW)
+        else:
+            print("No QR code detected.")
+            GPIO.output(RED_LED, GPIO.HIGH)
+            GPIO.output(GREEN_LED, GPIO.LOW)
+    except Exception as e:
+        print(f"Error processing image: {e}")
+    finally:
+        # Reset LEDs
+        GPIO.output(GREEN_LED, GPIO.LOW)
+        GPIO.output(RED_LED, GPIO.LOW)
+
+# Main loop for capturing images and checking QR codes
 print("Press 'c' to capture an image or 'q' to quit.")
-while True:
-    user_input = input("Enter 'c' to capture or 'q' to quit: ").strip().lower()
-    if user_input == 'c':
-        # Capture image using Picamera2
-        image_name = "captured_image.jpg"
-        print("Capturing image...")
-        picam2.capture_file(image_name)
-        
-        # Read the captured image using OpenCV
-        img = cv2.imread(image_name)
-        
-        # Detect QR code in the image
-        data, bbox, _ = detector.detectAndDecode(img)
-        
-        # If QR code data is found
-        if data:
-            print("QR Code detected: ", data, date_today, timeRN)
-            
-            # Write data to CSV file
-            try:
-                with open('Database.csv', mode='a') as csvfile:
-                    csvfileWriter = csv.writer(csvfile, delimiter=',', quotechar='"', quoting=csv.QUOTE_ALL)
-                    csvfileWriter.writerow([data, date_today, timeRN])
-            except Exception as e:
-                print("Error writing to CSV file: ", e)
-            
-            # Control LEDs and Servo based on QR code data
-            if data == 'green':
-                # Turn on green LED, turn off red LED
-                GPIO.output(green_led_pin, GPIO.HIGH)
-                GPIO.output(red_led_pin, GPIO.LOW)
-                
-                # Activate Servo motor
-                print("Correct QR code detected. Activating servo motor.")
-                servo_controller.move_servo(servo_pin, 90)  # Rotate the servo to 90 degrees (adjust as needed)
-                
-            elif data == 'red':
-                # Turn on red LED, turn off green LED
-                GPIO.output(green_led_pin, GPIO.LOW)
-                GPIO.output(red_led_pin, GPIO.HIGH)
-                
-                # Deactivate Servo motor
-                print("Incorrect QR code detected. Deactivating servo motor.")
-                servo_controller.move_servo(servo_pin, 0)  # Return servo to initial position (0 degrees)
-        
-        print(f"Image captured and saved as {image_name}.")
-        
-    elif user_input == 'q':
-        # Quit the program
-        print("Exiting...")
-        break
-
-# Stop the camera and preview
-picam2.stop_preview()
-picam2.stop()
-
-# Cleanup GPIO
-GPIO.cleanup()
+try:
+    while True:
+        user_input = input("Enter 'c' to capture or 'q' to quit: ").strip().lower()
+        if user_input == 'c':
+            capture_and_process_image()
+        elif user_input == 'q':
+            print("Exiting...")
+            break
+finally:
+    # Cleanup GPIO and stop camera
+    GPIO.cleanup()
+    picam2.stop_preview()
+    picam2.stop()
+    servo.stop()
